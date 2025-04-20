@@ -582,6 +582,14 @@ def start_jupyter_server(hostname, hostnames, param, task, env, bind_ip="127.0.0
     print(
         "Running Jupyter Notebook Server on {} [{}] port {} at {}".format(hostname, hostnames, port, cwd)
     )
+    additional_args = [
+        "--ServerApp.token='{}'".format(param.get("jupyter_token")) if param.get("jupyter_token") is not None else "",
+        "--ServerApp.password=''".format(param.get("jupyter_password")) if param.get("jupyter_password") is not None else "",
+        "--ServerApp.allow_origin=*".format(param.get("jupyter_allow_origin")) if param.get("jupyter_allow_origin") is not None else "",
+        "--ServerApp.base_url={}".format(param.get("jupyter_base_url")) if param.get("jupyter_base_url") is not None else "",
+    ]
+    additional_args = [a for a in additional_args if a]
+
     process = subprocess.Popen(
         [
             sys.executable,
@@ -594,7 +602,7 @@ def start_jupyter_server(hostname, hostnames, param, task, env, bind_ip="127.0.0
             bind_ip,
             "--port",
             str(port),
-        ],
+        ] + additional_args,
         env=env,
         stdout=fd,
         stderr=fd,
@@ -1323,6 +1331,7 @@ def verify_workspace_storage_access(store_workspace, task):
         )
         # do not throw the exception itself, because it will confuse readers
         exit(1)
+
 
 class SyncCallback:
     pipe_file_name_c = "/tmp/clearml_sync_pipe_c"
