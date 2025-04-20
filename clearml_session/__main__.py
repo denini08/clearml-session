@@ -189,16 +189,21 @@ def create_base_task(state, project_name=None, task_name=None, continue_task_id=
     task_script = task.data.script.to_dict()
     base_script_file = os.path.abspath(os.path.join(__file__, '..', 'tcp_proxy.py'))
     with open(base_script_file, 'rt') as f:
-        task_script['diff'] = f.read()
+        # notice lines always end with \n
+        task_script['diff'] = "".join([line for line in f.readlines() if not line.lstrip().startswith("#")])
     base_script_file = os.path.abspath(os.path.join(__file__, '..', 'interactive_session_task.py'))
     with open(base_script_file, 'rt') as f:
-        task_script['diff'] += '\n\n' + f.read()
+        task_script['diff'] += "\n\n"
+        # notice lines always end with \n
+        task_script['diff'] += "".join([line for line in f.readlines() if not line.lstrip().startswith("#")])
 
     task_script['working_dir'] = '.'
     task_script['entry_point'] = '.interactive_session.py'
     task_script['requirements'] = {'pip': '\n'.join(
         ["clearml>=1.1.5"] +
         (["jupyter", "jupyterlab", "jupyterlab_git", "traitlets"] if state.get('jupyter_lab') else []) +
+        (["boto3>=1.9", "azure-storage-blob>=12.0.0", "google-cloud-storage>=1.13.2"]
+         if not state.get('disable_storage_packages') else []) + \
         (['pylint'] if state.get('vscode_server') else []))}
 
     section, _, _ = _get_config_section_name()
@@ -267,7 +272,7 @@ def create_debugging_task(state, debug_task_id, task_name=None, task_project_id=
 
     base_script_file = os.path.abspath(os.path.join(__file__, '..', 'interactive_session_task.py'))
     with open(base_script_file, 'rt') as f:
-        entry_diff = ['+'+line.rstrip() for line in f.readlines()]
+        entry_diff = ['+'+line.rstrip() for line in f.readlines() if not line.lstrip().startswith("#")]
     entry_diff_header = \
         "diff --git a/__interactive_session__.py b/__interactive_session__.py\n" \
         "--- a/__interactive_session__.py\n" \
@@ -281,6 +286,8 @@ def create_debugging_task(state, debug_task_id, task_name=None, task_project_id=
     state['packages'] = \
         (state.get('packages') or []) + ["clearml"] + \
         (["jupyter", "jupyterlab", "jupyterlab_git", "traitlets"] if state.get('jupyter_lab') else []) + \
+        (["boto3>=1.9", "azure-storage-blob>=12.0.0", "google-cloud-storage>=1.13.2"]
+         if not state.get('disable_storage_packages') else []) + \
         (['pylint'] if state.get('vscode_server') else [])
     task.update_task(task_state)
     section, _, _ = _get_config_section_name()
@@ -420,9 +427,10 @@ def _get_running_tasks(client, prev_task_id):
         'page_size': 10, 'page': 0,
         'order_by': ['-last_update'],
         'user': [current_user_id],
-        'only_fields': ['id', 'created', 'parent']
+        'only_fields': ['id', 'created', 'parent', 'status_message']
     })
-    tasks_id_created = [(t.id, t.created, t.parent) for t in previous_tasks]
+    tasks_id_created = [(t.id, t.created, t.parent) for t in previous_tasks
+                        if "stopping" not in (t.status_message or "")]
     if prev_task_id and prev_task_id not in (t[0] for t in tasks_id_created):
         # manually check the last task.id
         try:
@@ -431,13 +439,13 @@ def _get_running_tasks(client, prev_task_id):
                 'id': [prev_task_id],
                 'page_size': 10, 'page': 0,
                 'order_by': ['-last_update'],
-                'only_fields': ['id', 'created', 'parent']
+                'only_fields': ['id', 'created', 'parent', 'status_message']
             })
         except APIError:
             # we could not find previous task, nothing to worry about.
             prev_tasks = None
 
-        if prev_tasks:
+        if prev_tasks and "stopping" not in (prev_tasks[0].status_message or ""):
             tasks_id_created += [(prev_tasks[0].id, prev_tasks[0].created, prev_tasks[0].parent)]
 
     return tasks_id_created
@@ -1462,6 +1470,10 @@ def setup_parser(parser):
     parser.add_argument('--force-dropbear', default=None, nargs='?', const='true', metavar='true/false',
                         type=lambda x: (str(x).strip().lower() in ('true', 'yes')),
                         help='Force using `dropbear` instead of SSHd')
+    parser.add_argument('--disable-storage-packages', default=None, nargs='?', const='true', metavar='true/false',
+                        type=lambda x: (str(x).strip().lower() in ('true', 'yes')),
+                        help='If True automatic boto3/azure-storage-blob/google-cloud-storage python '
+                             'packages will not be added, you can manually add them using --packages')
     parser.add_argument('--disable-store-defaults', action='store_true', default=None,
                         help='If set, do not store current setup as new default configuration')
     parser.add_argument('--disable-fingerprint-check', action='store_true', default=None,
