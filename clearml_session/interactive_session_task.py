@@ -1144,11 +1144,16 @@ def _sync_workspace_snapshot(task, param, auto_shutdown_task):
         files_desc += "{}: {}[{}]\n".format(f.absolute(), fs.st_size, fs.st_mtime)
     workspace_hash = hash(str(files_desc))
     if param.get("workspace_hash") == workspace_hash:
-        print("Skipping workspace snapshot upload, "
-              "already uploaded no files changed since last sync {}".format(param.get(sync_runtime_property)))
-        return
+        # noinspection PyPackageRequirements
+        try:
+            time_stamp = datetime.datetime.fromtimestamp(
+                param.get(sync_runtime_property)).strftime('%Y-%m-%d %H:%M:%S')
+        except Exception:
+            time_stamp = param.get(sync_runtime_property)
 
-    print("Uploading workspace: {}".format(workspace_folder))
+        print("Skipping workspace snapshot upload, "
+              "already uploaded no files changed since last sync {}".format(time_stamp))
+        return
 
     # force running status - so that we can upload the artifact
     prev_status = task.status
@@ -1156,6 +1161,8 @@ def _sync_workspace_snapshot(task, param, auto_shutdown_task):
         task.mark_started(force=True)
 
     try:
+        print("Compressing workspace: {}".format(workspace_folder))
+
         # create a tar file of the folder
         # put a consistent file name into a temp folder because the filename is part of
         # the compressed artifact, and we want consistency in hash.
@@ -1176,6 +1183,8 @@ def _sync_workspace_snapshot(task, param, auto_shutdown_task):
             if filename.is_file():
                 relative_file_name = filename.relative_to(workspace_folder)
                 archive_preview += '{} - {:,} B\n'.format(relative_file_name, filename.stat().st_size)
+
+        print("Uploading workspace: {}".format(workspace_folder))
 
         # upload actual snapshot tgz
         timestamp = datetime.datetime.now(datetime.UTC) \
