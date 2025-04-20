@@ -1533,6 +1533,7 @@ class SyncCallback:
             "#!/bin/bash",
             "[ \"$UID\" -ne 0 ] && echo \"shutdown: Permission denied. Try as root.\" && exit 1",
             "[ ! -f /run/clearml ] && echo \"shutdown: failed.\" && exit 2",
+            "[ ! -z $(command -v {}) ] && echo \"Syncing workspace\" && {}".format(self.cmd_file, self.cmd_file),
             "kill -9 $(cat /run/clearml 2>/dev/null) && echo \"system is now spinning down - "
             "it might take a minute if we need to upload the workspace:\""
             " && for ((i=180; i>=0; i--)); do echo -n \" .\"; sleep 1; done",
@@ -1725,8 +1726,8 @@ def main():
         workspace_dir=param.get("store_workspace")
     )
     syncer.init()
-
     # notice this will end when process is done
+    print('Wait until shutdown')
     syncer.wait_on_process(run_background_sync_thread=True, call_sync_callback_on_return=True)
 
     print('We are done')
