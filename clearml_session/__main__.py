@@ -193,6 +193,8 @@ def create_base_task(state, project_name=None, task_name=None, continue_task_id=
         with open(base_script_file, 'rt') as f:
             # notice lines always end with \n
             task_script['diff'] = "".join([line for line in f.readlines() if not line.lstrip().startswith("#")])
+    else:
+        task_script['diff'] = ""
 
     base_script_file = os.path.abspath(os.path.join(__file__, '..', 'interactive_session_task.py'))
     with open(base_script_file, 'rt') as f:
