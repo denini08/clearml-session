@@ -191,16 +191,23 @@ def setup_os_env(param):
     return env
 
 
-def monitor_jupyter_server(fd, local_filename, process, task, jupyter_port, hostnames):
+def monitor_jupyter_server(fd, local_filename, process, task, jupyter_port, hostnames, param):
     # todo: add auto spin down see: https://tljh.jupyter.org/en/latest/topic/idle-culler.html
     # print stdout/stderr
     prev_line_count = 0
     process_running = True
-    token = None
-    while process_running:
+    if param and param.get("jupyter_token") is not None or param.get("jupyter_password") is not None:
+        token = param.get("jupyter_token") or param.get("jupyter_password") or True
+    else:
+        token = None
+
+    port = None
+    tic = time()
+    # if more than 30 sec passed, we give up just break
+    while process_running and time() - tic < 31:
         process_running = False
         try:
-            process.wait(timeout=2.0 if not token else 15.0)
+            process.wait(timeout=2.0)
         except subprocess.TimeoutExpired:
             process_running = True
 
@@ -218,9 +225,6 @@ def monitor_jupyter_server(fd, local_filename, process, task, jupyter_port, host
 
         print("".join(new_lines))
         prev_line_count += len(new_lines)
-        # if we already have the token, do nothing, just monitor
-        if token:
-            continue
 
         # update task with jupyter notebook server links (port / token)
         line = ''
@@ -228,9 +232,10 @@ def monitor_jupyter_server(fd, local_filename, process, task, jupyter_port, host
             if "http://" not in line and "https://" not in line:
                 continue
             parts = line.split('?token=', 1)
-            if len(parts) != 2:
-                continue
-            token = parts[1]
+            if not token:
+                if len(parts) != 2:
+                    continue
+                token = parts[1]
             port = parts[0].split(':')[-1]
             # try to cast to int
             try:
@@ -238,17 +243,20 @@ def monitor_jupyter_server(fd, local_filename, process, task, jupyter_port, host
             except (TypeError, ValueError):
                 continue
             break
+
         # we could not locate the token, try again
-        if not token:
+        if not token or not port:
             continue
 
         # we ignore the reported port, because jupyter server will get confused
         # if we have multiple servers running and will point to the wrong port/server
         task.set_parameter(name='properties/jupyter_port', value=str(jupyter_port))
-        jupyter_url = '{}://{}:{}?token={}'.format(
-            'https' if "https://" in line else 'http',
-            hostnames, jupyter_port, token
-        )
+        if token and token != True:
+            jupyter_url = '{}://{}:{}?token={}'.format(
+                'https' if "https://" in line else 'http', hostnames, jupyter_port, token)
+        else:
+            jupyter_url = '{}://{}:{}'.format('https' if "https://" in line else 'http', hostnames, jupyter_port)
+            token = ""
 
         # update the task with the correct links and token
         if Session.check_min_api_version("2.13"):
@@ -265,19 +273,6 @@ def monitor_jupyter_server(fd, local_filename, process, task, jupyter_port, host
         print('\nJupyter Lab URL: {}\n'.format(jupyter_url))
         # if we got here, we have a token and we can leave
         break
-
-    # skip cleanup the process is still running
-    # cleanup
-    # # noinspection PyBroadException
-    # try:
-    #     os.close(fd)
-    # except Exception:
-    #     pass
-    # # noinspection PyBroadException
-    # try:
-    #     os.unlink(local_filename)
-    # except Exception:
-    #     pass
 
     return process
 
@@ -608,7 +603,7 @@ def start_jupyter_server(hostname, hostnames, param, task, env, bind_ip="127.0.0
         stderr=fd,
         cwd=cwd,
     )
-    return monitor_jupyter_server(fd, local_filename, process, task, port, hostnames)
+    return monitor_jupyter_server(fd, local_filename, process, task, port, hostnames, param)
 
 
 def setup_ssh_server(hostname, hostnames, param, task, env):
