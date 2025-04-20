@@ -171,7 +171,7 @@ def request_task_abort(task, force=False, status_message=None):
     return res
 
 
-def create_base_task(state, project_name=None, task_name=None, continue_task_id=None, project_id=None):
+def create_base_task(state, project_name=None, task_name=None, continue_task_id=None, project_id=None, add_tcp_proxy=True):
     if continue_task_id:
         task = Task.clone(
             source_task=continue_task_id,
@@ -187,10 +187,13 @@ def create_base_task(state, project_name=None, task_name=None, continue_task_id=
         )
 
     task_script = task.data.script.to_dict()
-    base_script_file = os.path.abspath(os.path.join(__file__, '..', 'tcp_proxy.py'))
-    with open(base_script_file, 'rt') as f:
-        # notice lines always end with \n
-        task_script['diff'] = "".join([line for line in f.readlines() if not line.lstrip().startswith("#")])
+
+    if add_tcp_proxy:
+        base_script_file = os.path.abspath(os.path.join(__file__, '..', 'tcp_proxy.py'))
+        with open(base_script_file, 'rt') as f:
+            # notice lines always end with \n
+            task_script['diff'] = "".join([line for line in f.readlines() if not line.lstrip().startswith("#")])
+
     base_script_file = os.path.abspath(os.path.join(__file__, '..', 'interactive_session_task.py'))
     with open(base_script_file, 'rt') as f:
         task_script['diff'] += "\n\n"
@@ -674,7 +677,8 @@ def clone_task(state, project_id=None):
             project_name=state.get('project'),
             task_name=state.get('session_name'),
             continue_task_id=state.get('continue_session'),
-            project_id=project_id
+            project_id=project_id,
+            add_tcp_proxy=state.get('keepalive'),
         )
         new_task = True
 
