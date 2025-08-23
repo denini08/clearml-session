@@ -96,6 +96,15 @@ def get_free_port(range_min, range_max):
     return port
 
 
+def _get_env_vars(*var_names, default=None):
+    for var_name in var_names:
+        value = os.environ.get(var_name, "").strip()
+        if value:
+            print(f"Using value from {var_name}: {value}")
+            return value
+    return default
+
+
 def init_task(param, a_default_ssh_fingerprint):
     # initialize ClearML
     Task.add_requirements('jupyter')
@@ -385,19 +394,43 @@ def start_vscode_server(hostname, hostnames, param, task, env, bind_ip="127.0.0.
 
     print("Running VSCode Server on {} [{}] port {} at {}".format(hostname, hostnames, port, cwd))
     print("VSCode Server available: http://{}:{}/\n".format(hostnames, port))
-    user_folder = os.path.join(cwd, ".vscode/user/")
-    exts_folder = os.path.join(cwd, ".vscode/exts/")
+    user_folder = os.path.expanduser(
+        _get_env_vars(
+            "CLEARML_VSCODE_USER_DATA_DIR",
+            "CLEARML_SESSION_VSCODE_USER_DATA_DIR",
+            default=os.path.join(cwd, ".vscode/user/"),
+        )
+    )
+    exts_folder = os.path.expanduser(
+        _get_env_vars(
+            "CLEARML_VSCODE_EXTENSIONS_DIR",
+            "CLEARML_SESSION_VSCODE_EXTENSIONS_DIR",
+            default=os.path.join(cwd, ".vscode/exts/"),
+        )
+    )
     proc = None
 
     try:
         fd, local_filename = mkstemp()
         if pre_installed:
-            user_folder = os.path.expanduser("~/.local/share/code-server/")
+            user_folder = os.path.expanduser(
+                _get_env_vars(
+                    "CLEARML_VSCODE_USER_DATA_DIR",
+                    "CLEARML_SESSION_VSCODE_USER_DATA_DIR",
+                    default="~/.local/share/code-server/",
+                )
+            )
             if not os.path.isdir(user_folder):
                 user_folder = None
                 exts_folder = None
             else:
-                exts_folder = os.path.expanduser("~/.local/share/code-server/extensions/")
+                exts_folder = os.path.expanduser(
+                    _get_env_vars(
+                        "CLEARML_VSCODE_EXTENSIONS_DIR",
+                        "CLEARML_SESSION_VSCODE_EXTENSIONS_DIR",
+                        default="~/.local/share/code-server/extensions/",
+                    )
+                )
         else:
             vscode_extensions = param.get("vscode_extensions") or ""
             vscode_extensions_cmd = []
