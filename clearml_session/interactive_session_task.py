@@ -13,6 +13,8 @@ from threading import Thread
 from time import sleep, time
 import datetime
 from uuid import uuid4
+import tarfile
+import platform
 
 import psutil
 import requests
@@ -294,8 +296,8 @@ def start_vscode_server(hostname, hostnames, param, task, env, bind_ip="127.0.0.
 
     # get vscode version and python extension version
     # they are extremely flaky, this combination works, most do not.
-    vscode_version = '4.99.2'
-    python_ext_version = '2025.4.0'
+    vscode_version = '4.103.1'
+    python_ext_version = '2025.12.0'
     if param.get("vscode_version"):
         vscode_version_parts = param.get("vscode_version").split(':')
         vscode_version = vscode_version_parts[0]
@@ -317,69 +319,97 @@ def start_vscode_server(hostname, hostnames, param, task, env, bind_ip="127.0.0.
 
     code_server_deb_download_link = \
         os.environ.get("CLEARML_SESSION_VSCODE_SERVER_DEB") or \
-        'https://github.com/coder/code-server/releases/download/v{version}/code-server_{version}'
+        os.environ.get("CLEARML_SESSION_VSCODE_SERVER_TGZ") or \
+        'https://github.com/coder/code-server/releases/download/v{version}/code-server-{version}'
+
+    if platform.machine() == "aarch64":
+        platform_type = "arm64"
+    else:
+        platform_type = "amd64"
 
     # support x86/arm dnf/deb
-    if not code_server_deb_download_link.endswith(".deb") and not code_server_deb_download_link.endswith(".rpm"):
-        import platform
-        if "arm" in (platform.processor() or "").lower():
-            code_server_deb_download_link += "_arm64"
-        else:
-            code_server_deb_download_link += "_amd64"
+    if (not code_server_deb_download_link.endswith(".deb") and not code_server_deb_download_link.endswith(".rpm")
+            and not code_server_deb_download_link.endswith(".tar.gz") and not code_server_deb_download_link.endswith(".tgz")):
+        code_server_deb_download_link += "-linux-{}.tar.gz".format(platform_type)
 
-        if shutil.which("dnf") and not shutil.which("apt"):
-            code_server_deb_download_link += ".rpm"
-            parts = code_server_deb_download_link.split("/")
-            # rpm links with "-" instead of "_" in the rpm filename
-            parts[-1] = parts[-1].replace("_", "-")
-            code_server_deb_download_link = "/".join(parts)
-        else:
-            code_server_deb_download_link += ".deb"
-
+    is_vscode_tgz = code_server_deb_download_link.endswith(".tar.gz") or code_server_deb_download_link.endswith(".tgz")
     pre_installed = False
     python_ext = None
+
+    base_path = Path.home() / ".local" 
+    base_vscode_ext_dir = base_path / "share" / "code-server"
 
     # find a free tcp port
     port = get_free_port(9000, 9100) if not port else int(port)
 
-    if os.geteuid() == 0:
-        # check if preinstalled
-        # noinspection PyBroadException
-        try:
-            vscode_path = shutil.which("code-server")
-            pre_installed = bool(vscode_path)
-        except Exception:
-            vscode_path = None
+    # check if preinstalled
+    # noinspection PyBroadException
+    try:
+        vscode_path = shutil.which("code-server")
+        if vscode_path:
+            print("INFO: found existing vscode code-server at ({}) using it".format(vscode_path))
+    except Exception:
+        vscode_path = None
 
-        if not vscode_path:
-            # installing VSCODE:
-            try:
-                python_ext = StorageManager.get_local_copy(
-                    python_ext_download_link.format(python_ext_version),
-                    extract_archive=False) if python_ext_download_link else None
-                code_server_deb = StorageManager.get_local_copy(
-                    code_server_deb_download_link.format(version=vscode_version),
-                    extract_archive=False)
-                if shutil.which("dnf") and not shutil.which("dpkg"):
-                    os.system("dnf install -y {}".format(code_server_deb))
-                else:
-                    os.system("dpkg -i {}".format(code_server_deb))
-            except Exception as ex:
-                print("Failed installing vscode server: {}".format(ex))
-                return
-            vscode_path = 'code-server'
-    else:
-        python_ext = None
-        pre_installed = True
-        # check if code-server exists
-        # noinspection PyBroadException
+    if not vscode_path:
+        # installing VSCODE:
         try:
-            vscode_path = shutil.which("code-server")
-            assert vscode_path
-        except Exception:
-            print('Error: Cannot install code-server (not root) and could not find code-server executable, skipping.')
-            task.set_parameter(name='properties/vscode_port', value=str(-1))
-            return
+            python_ext = StorageManager.get_local_copy(
+                python_ext_download_link.format(python_ext_version),
+                extract_archive=False) if python_ext_download_link else None
+            download_url = code_server_deb_download_link.format(version=vscode_version)
+            code_server_dl = StorageManager.get_local_copy(download_url, extract_archive=False)
+            if not code_server_dl:
+                raise ValueError("Failed downloading vscode-server: {}".format(download_url))
+            
+            if is_vscode_tgz:
+                def extract_tar(base_path):
+                    base_vscode_ext_dir = base_path / "share" / "code-server"
+                    base_vscode_ext_dir.mkdir(parents=True, exist_ok=True)
+                    target_path = base_path / "bin" /"code-server"
+                    target_path.mkdir(parents=True, exist_ok=True)
+                    with tarfile.open(code_server_dl, "r:gz") as tar:
+                        if sys.version_info >= (3, 12):
+                            tar.extractall(path=target_path, filter='fully_trusted')
+                        else:
+                            tar.extractall(path=target_path)
+                    return target_path, base_vscode_ext_dir
+
+                try:
+                    base_path = Path.home() / ".local" 
+                    target_path, base_vscode_ext_dir = extract_tar(base_path)
+                    
+                except Exception:
+                    try:
+                        base_path = Path(gettempdir()) / ".clearml.local" 
+                        target_path, base_vscode_ext_dir = extract_tar(base_path)
+                    except Exception as ex:
+                        print("ERROR: FAILED extracting and installing vscode code-server: {}".format(ex))
+                        target_path = base_vscode_ext_dir = None
+
+                if not target_path:
+                    print("ERROR: FAILED extracting and installing vscode code-server: leaving")
+                else:
+                    extracted_dir = next(Path(target_path).glob("code-server-{}-linux-{}".format(vscode_version, platform_type)))
+                    # add it to path
+                    env["PATH"] = os.environ["PATH"] = os.environ.get("PATH", "") + ":{}".format(os.path.join(os.path.abspath(extracted_dir), "bin")) 
+            else:
+                if shutil.which("dnf") and not shutil.which("dpkg"):
+                    os.system("dnf install -y {}".format(code_server_dl))
+                else:
+                    os.system("dpkg -i {}".format(code_server_dl))
+
+            vscode_path = 'code-server'    
+        
+        except Exception as ex:
+            print("Failed installing vscode server: {}".format(ex))
+            vscode_path = None
+    
+    # check if installed
+    if not vscode_path:
+        print('Error: Cannot install code-server (not root) and could not find code-server executable, skipping.')
+        task.set_parameter(name='properties/vscode_port', value=str(-1))
+        return
 
     cwd = (
         os.path.expandvars(os.path.expanduser(param["user_base_directory"]))
@@ -419,7 +449,7 @@ def start_vscode_server(hostname, hostnames, param, task, env, bind_ip="127.0.0.
                 _get_env_vars(
                     "CLEARML_VSCODE_USER_DATA_DIR",
                     "CLEARML_SESSION_VSCODE_USER_DATA_DIR",
-                    default="~/.local/share/code-server/",
+                    default=base_vscode_ext_dir.as_posix(),
                 )
             )
             if not os.path.isdir(user_folder):
@@ -430,7 +460,7 @@ def start_vscode_server(hostname, hostnames, param, task, env, bind_ip="127.0.0.
                     _get_env_vars(
                         "CLEARML_VSCODE_EXTENSIONS_DIR",
                         "CLEARML_SESSION_VSCODE_EXTENSIONS_DIR",
-                        default="~/.local/share/code-server/extensions/",
+                        default=(base_vscode_ext_dir / "extensions").as_posix(),
                     )
                 )
         else:
@@ -718,7 +748,7 @@ def setup_ssh_server(hostname, hostnames, param, task, env):
                                         os.environ.get("CLEARML_CONFIG_FILE") or os.environ.get("TRAINS_CONFIG_FILE"),
                 ))
             except Exception:
-                print("warning failed setting ~/.profile")
+                print("WARNING: failed setting ~/.profile")
 
             # check if sshd is preinstalled
             # noinspection PyBroadException
@@ -742,7 +772,6 @@ def setup_ssh_server(hostname, hostnames, param, task, env):
                     if os.system("{} dropbear -V > /dev/null 2>&1".format(dropbear)):
                         raise Exception("dropbear execution failed")
                 except Exception:
-                    import platform
                     if platform.machine() == "aarch64":
                         dropbear_download_link += "_arm64"
                     else:
@@ -754,6 +783,7 @@ def setup_ssh_server(hostname, hostnames, param, task, env):
                         raise Exception("dropbear execution failed")
                 # set to dropbear
                 sshd_path = dropbear
+                use_dropbear = True
             except Exception:
                 print('Error: failed locating SSHd and failed fetching `dropbear`, leaving!')
                 return
@@ -1671,6 +1701,10 @@ class SyncCallback:
 
         if not self._monitor_process:
             return
+
+        # if we are not running as root, remove the root check
+        if os.getuid() != 0:
+            batch_command = [batch_command[0]] + batch_command[2:]
 
         path_folders = os.environ.get("PATH", "/usr/bin").split(os.pathsep)
         if self._path_dir:
