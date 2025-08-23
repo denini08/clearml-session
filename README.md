@@ -403,6 +403,8 @@ options:
                         Advanced: Only include queues with this specific tag from the selection
   --skip-docker-network [true/false]
                         Advanced: If set, `--network host` is **not** passed to docker (assumes k8s network ingestion) (default: false)
+  --docker-network      [port/host]
+                        Advanced: `port` (default) then `-p 10022:10022` is passed to docker, if `host` then `--network host` is passed to docker. Notice: `port` requires clearml-agent v2+
   --password PASSWORD   Advanced: Select ssh password for the interactive session (default: `randomly-generated` or previously used one)
   --randomize [RANDOMIZE ...]
                         Advanced: Recreate a new random ssh password for the interactive session options: `--randomize` one time recreate random password, --randomize `always` create a

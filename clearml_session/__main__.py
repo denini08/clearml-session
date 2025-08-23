@@ -736,11 +736,29 @@ def clone_task(state, project_id=None):
     if not state.get('skip_docker_network') and not docker:
         docker = default_docker_image
     if docker:
-        task_params['{}/default_docker'.format(section)] = docker.replace('--network host', '').strip()
+        # just in case, clean up docker image name form args
+        docker = docker.replace('--network host', '').strip()
+        min_port = task_params["{}/ssh_ports".format(section)].split(":")[0] or "10022"
+        if min_port:
+            docker = docker.replace('-p 10022:{}'.format(min_port), '').strip()
+        task_params['{}/default_docker'.format(section)] = docker
+
+        # add user docker args
         if state.get('docker_args'):
             docker += ' {}'.format(state.get('docker_args'))
-        task.set_base_docker(docker + (
-            ' --network host' if not state.get('skip_docker_network') and '--network host' not in docker else ''))
+
+        if not state.get('skip_docker_network'):
+            # add network flags after user docker args
+            if state.get('docker_network') == "port":
+                if '-p 10022:{}'.format(min_port) not in docker:
+                    docker += ' -p 10022:{}'.format(min_port)
+            else:
+                if '--network host' not in docker:
+                    docker += ' --network host'
+
+        # set docker image/args
+        task.set_base_docker(docker)
+
     # set the bash init script
     if state.get('init_script') is not None and (not new_task or state.get('init_script').strip()):
         # noinspection PyProtectedMember
@@ -1463,8 +1481,12 @@ def setup_parser(parser):
                         help='Advanced: Only include queues with this specific tag from the selection')
     parser.add_argument('--skip-docker-network', default=None, nargs='?', const='true', metavar='true/false',
                         type=lambda x: (str(x).strip().lower() in ('true', 'yes')),
-                        help='Advanced: If set, `--network host` is **not** passed to docker '
+                        help='Advanced: If set, `--network host` or `-p <host_port>:<container_port>` are **not** passed to docker '
                              '(assumes k8s network ingestion) (default: false)')
+    parser.add_argument('--docker-network', default='port', choices=['host', 'port'], metavar='host/port',
+                        help='Advanced: If set, `host` then `--network host` is passed to docker '
+                             'If set, `port` then `-p 10022:10022` is passed to docker. '
+                             'Notice: `port` requires aclearml-agent v2+')
     parser.add_argument('--password', type=str, default=None,
                         help='Advanced: Select ssh password for the interactive session '
                              '(default: `randomly-generated` or previously used one)')
@@ -1682,6 +1704,7 @@ def _get_previous_session(
             choice = input("{} active session id={} [Y]/n? ".format(question_verb, task_id))
             if str(choice).strip().lower() in ("", "y", "yes"):
                 return Task.get_task(task_id=task_id)
+            return None
 
     # multiple sessions running
     print("{} active session:".format(verb))
