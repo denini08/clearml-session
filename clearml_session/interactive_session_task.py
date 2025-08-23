@@ -720,28 +720,43 @@ def setup_ssh_server(hostname, hostnames, param, task, env):
             except Exception:
                 print("warning failed setting ~/.profile")
 
-            # check if shd is preinstalled
+            # check if sshd is preinstalled
+            # noinspection PyBroadException
+            # try:
+            #     # try running SSHd as non-root (currently bypassed, use dropbear instead)
+            #     sshd_path = None  ## subprocess.check_output('which sshd', shell=True).decode().strip()
+            #     if not sshd_path:
+            #         raise ValueError("sshd was not found")
+            # except Exception:
+            #     print('WARNING: SSHd was not found defaulting to user-space dropbear sshd server')
+            #
+
             # noinspection PyBroadException
             try:
-                # try running SSHd as non-root (currently bypassed, use dropbear instead)
-                sshd_path = None  ## subprocess.check_output('which sshd', shell=True).decode().strip()
-                if not sshd_path:
-                    raise ValueError("sshd was not found")
-            except Exception:
-                # noinspection PyBroadException
+                dropbear_download_link = (os.environ.get("CLEARML_DROPBEAR_EXEC") or
+                    'https://github.com/clearml/dropbear/releases/download/DROPBEAR_2025.88/dropbearmulti')
+
+                dropbear = StorageManager.get_local_copy(dropbear_download_link, extract_archive=False)
                 try:
-                    print('WARNING: SSHd was not found defaulting to user-space dropbear sshd server')
-                    dropbear_download_link = \
-                        os.environ.get("CLEARML_DROPBEAR_EXEC") or \
-                        'https://github.com/clearml/dropbear/releases/download/DROPBEAR_CLEARML_2024.86/dropbearmulti'
+                    os.chmod(dropbear, 0o744)
+                    if os.system("{} dropbear -V > /dev/null 2>&1".format(dropbear)):
+                        raise Exception("dropbear execution failed")
+                except Exception:
+                    import platform
+                    if platform.machine() == "aarch64":
+                        dropbear_download_link += "_arm64"
+                    else:
+                        dropbear_download_link += "_amd64"
+
                     dropbear = StorageManager.get_local_copy(dropbear_download_link, extract_archive=False)
                     os.chmod(dropbear, 0o744)
-                    sshd_path = dropbear
-                    use_dropbear = True
-
-                except Exception:
-                    print('Error: failed locating SSHd and failed fetching `dropbear`, leaving!')
-                    return
+                    if os.system("{} dropbear -V > /dev/null 2>&1".format(dropbear)):
+                        raise Exception("dropbear execution failed")
+                # set to dropbear
+                sshd_path = dropbear
+            except Exception:
+                print('Error: failed locating SSHd and failed fetching `dropbear`, leaving!')
+                return
 
             # noinspection PyBroadException
             try:
@@ -798,10 +813,13 @@ def setup_ssh_server(hostname, hostnames, param, task, env):
             except Exception:  # noqa
                 pass
             if v:
-                with open(filename, 'wt') as f:
-                    f.write(v + (' {}@{}'.format(current_user, hostname) if filename.endswith('.pub') else ''))
-                os.chmod(filename, 0o600 if filename.endswith('.pub') else 0o600)
-                keys_filename[k] = filename
+                try:
+                    with open(filename, 'wt') as f:
+                        f.write(v + (' {}@{}'.format(current_user, hostname) if filename.endswith('.pub') else ''))
+                    os.chmod(filename, 0o600 if filename.endswith('.pub') else 0o600)
+                    keys_filename[k] = filename
+                except Exception as ex:
+                    print('Warning: failed creating ssh key file {}: {}'.format(filename, ex))
 
         # run server in foreground so it gets killed with us
         if use_dropbear:
@@ -1117,6 +1135,10 @@ def get_host_name(task, param):
             s.close()
     except Exception:
         pass
+
+    # override if we have host name defines
+    if os.environ.get("CLEARML_AGENT_HOST_IP"):
+        hostnames = hostname = os.environ.get("CLEARML_AGENT_HOST_IP")
 
     # update host name
     if (not task.get_parameter(name='properties/external_address') and
@@ -1834,17 +1856,32 @@ def main():
     ssh_port = setup_ssh_server(hostname, hostnames, param, task, env)
 
     # make sure we set it to the runtime properties
-    if ssh_port and param.get("router_enabled"):
+    if ssh_port:
+        ext_ssh_port = 0
         # noinspection PyProtectedMember
-        address = task._get_runtime_properties().get("external_address") or ""
+        if task._get_runtime_properties().get("_external_host_tcp_port_mapping"):
+            # noinspection PyProtectedMember
+            ext_port_mapping = task._get_runtime_properties().get("_external_host_tcp_port_mapping")
+            for port_map in ext_port_mapping.split(","):
+                if port_map.split(":")[-1] == str(ssh_port):
+                    ext_ssh_port = port_map.split(":")[0]
+                    break
+
+        if not ext_ssh_port:
+            ext_ssh_port = ssh_port
+        # noinspection PyProtectedMember
+        address = task._get_runtime_properties().get("external_address") or hostnames
         print("Requesting TCP route from router ingress to {} port {}".format(address, ssh_port))
         # noinspection PyProtectedMember
         task._set_runtime_properties({
             "external_address": address,
-            "external_tcp_port": ssh_port,
+            "external_tcp_port": str(ext_ssh_port),
             "_SERVICE": "EXTERNAL_TCP",
         })
-        task.set_system_tags((task.get_system_tags() or []) + ["external_service"])
+
+        # ask the router to set routing to us
+        if param.get("router_enabled"):
+            task.set_system_tags((task.get_system_tags() or []) + ["external_service"])
 
     start_vscode_server(hostname, hostnames, param, task, env)
 

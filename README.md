@@ -425,11 +425,3 @@ Notice! all arguments are stored as new defaults for the next execution
 
 ```
 
-
-
-
-# TODO:
-[x] Update readme with latest help
-[x] Print last status message when failing (k8s status usually helps)
-[ ] Add ~/python.sh to solve pycharm remote ssh no env issue :  #!/bin/bash source ~/.bashrc ~/.clearml/.../python $@ 
-

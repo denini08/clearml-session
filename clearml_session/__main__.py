@@ -22,6 +22,12 @@ else:
     import pexpect  # noqa
 
 import psutil
+
+try:
+    import tqdm
+except ImportError:
+    tqdm = None
+
 from clearml import Task
 from clearml.backend_api.session.client import APIClient, APIError
 from clearml.backend_api.services import tasks
@@ -406,19 +412,27 @@ def delete_old_tasks(state, client, base_task_id, skip_latest_session=True):
         'status': ['failed', 'stopped', 'completed'],
         'parent': base_task_id or None,
         'system_tags': None if base_task_id else [system_tag],
-        'page_size': 100, 'page': 0,
+        'page_size': 20, 'page': 0,
         'order_by': ['-last_update'],
         'user': [current_user_id],
         'only_fields': ['id']
     })
 
-    for i, t in enumerate(previous_tasks):
+    if not state.get("yes"):
+        choice = input('Remove #{} stale interactive sessions [Y]/n? '.format(len(previous_tasks)))
+        if str(choice).strip().lower() in ('n', 'no'):
+            return
+        
+    print('Removing #{} stale sessions'.format(len(previous_tasks)))
+
+    for i, t in enumerate(previous_tasks if not tqdm else tqdm.tqdm(previous_tasks)):
         # skip the selected Task which has our new workspace
         if state.get("continue_session") == t.id:
             continue
 
         if state.get('verbose'):
-            print('Removing {}/{} stale sessions'.format(i+1, len(previous_tasks)))
+            print('Checking session {}/{}'.format(i+1, len(previous_tasks)))
+        
         # no need to worry about workspace snapshots,
         # because they are input artifacts and thus will Not actually be deleted
         # we will delete them manually if the Task has its own workspace snapshot
@@ -428,6 +442,9 @@ def delete_old_tasks(state, client, base_task_id, skip_latest_session=True):
             if skip_latest_session and task.artifacts and i == 0:
                 # do not delete this workspace yet (only next time)
                 continue
+
+            if state.get('verbose'):
+                print('Removing stale session {}/{}'.format(i+1, len(previous_tasks)))
 
             task.delete(
                 delete_artifacts_and_models=True,
@@ -1134,8 +1151,8 @@ def monitor_ssh_tunnel(state, task, ssh_setup_completed_callback=None):
                 jupyter_port = task_parameters.get('properties/jupyter_port')
 
                 ssh_port = ssh_port or \
-                    task_parameters.get('properties/k8s-pod-port') or \
-                    task_parameters.get('properties/external_ssh_port') or internal_ssh_port
+                   task_parameters.get('properties/k8s-pod-port') or \
+                   task_parameters.get('properties/external_ssh_port') or internal_ssh_port
 
                 if state.get('keepalive'):
                     internal_ssh_port = task_parameters.get('properties/internal_stable_ssh_port') or internal_ssh_port
