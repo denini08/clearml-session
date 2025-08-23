@@ -404,7 +404,7 @@ options:
   --skip-docker-network [true/false]
                         Advanced: If set, `--network host` is **not** passed to docker (assumes k8s network ingestion) (default: false)
   --docker-network      [port/host]
-                        Advanced: `port` (default) then `-p 10022:10022` is passed to docker, if `host` then `--network host` is passed to docker. Notice: `port` requires clearml-agent v2+
+                        Advanced: `host` (default) then `--network host` is passed to docker, if `port` then `-p 10022:10022` is passed to docker. Notice: `port` requires clearml-agent v2+
   --password PASSWORD   Advanced: Select ssh password for the interactive session (default: `randomly-generated` or previously used one)
   --randomize [RANDOMIZE ...]
                         Advanced: Recreate a new random ssh password for the interactive session options: `--randomize` one time recreate random password, --randomize `always` create a
@@ -425,4 +425,11 @@ Notice! all arguments are stored as new defaults for the next execution
 
 ```
 
+
+
+
+# TODO:
+[x] Update readme with latest help
+[x] Print last status message when failing (k8s status usually helps)
+[ ] Add ~/python.sh to solve pycharm remote ssh no env issue :  #!/bin/bash source ~/.bashrc ~/.clearml/.../python $@ 
 

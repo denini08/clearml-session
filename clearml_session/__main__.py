@@ -1483,10 +1483,10 @@ def setup_parser(parser):
                         type=lambda x: (str(x).strip().lower() in ('true', 'yes')),
                         help='Advanced: If set, `--network host` or `-p <host_port>:<container_port>` are **not** passed to docker '
                              '(assumes k8s network ingestion) (default: false)')
-    parser.add_argument('--docker-network', default='port', choices=['host', 'port'], metavar='host/port',
-                        help='Advanced: If set, `host` then `--network host` is passed to docker '
+    parser.add_argument('--docker-network', default='host', choices=['host', 'port'], metavar='host/port',
+                        help='Advanced: If set, `host` (default) then `--network host` is passed to docker '
                              'If set, `port` then `-p 10022:10022` is passed to docker. '
-                             'Notice: `port` requires aclearml-agent v2+')
+                             'Notice: `port` requires clearml-agent v2+')
     parser.add_argument('--password', type=str, default=None,
                         help='Advanced: Select ssh password for the interactive session '
                              '(default: `randomly-generated` or previously used one)')
