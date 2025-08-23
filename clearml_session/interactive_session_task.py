@@ -897,6 +897,12 @@ def setup_user_env(param, task):
     except Exception as ex:
         print("Error [{}]: Failed to store new config file, using original".format(ex))
 
+    # fix casting errors
+    if str(param.get("user_key") or "").lower() == "none":
+        param["user_key"] = None
+    if str(param.get("user_secret") or "").lower() == "none":
+        param["user_secret"] = None
+
     # apply vault if we have it
     vault_environment = {}
     if param.get("user_key") and param.get("user_secret"):
