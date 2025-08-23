@@ -340,17 +340,26 @@ def find_prev_session(state, client):
     if not state.get("store_workspace"):
         return
 
-    current_user_id = _get_user_id(client)
-    previous_tasks = client.tasks.get_all(**{
-        'status': ['failed', 'stopped', 'completed'],
-        'system_tags': [system_tag],
-        'page_size': 100, 'page': 0,
-        'order_by': ['-last_update'],
-        'user': [current_user_id],
-        'only_fields': ['id', 'name', 'execution.artifacts', 'last_update']
-    })
-
     continue_session_id = state.get("continue_session")
+    if continue_session_id:
+        previous_tasks = client.tasks.get_all(**{
+            'id': [continue_session_id],
+            'system_tags': [system_tag],
+            'page_size': 20, 'page': 0,
+            'order_by': ['-last_update'],
+            'only_fields': ['id', 'name', 'execution.artifacts', 'last_update']
+        })
+    else:
+        current_user_id = _get_user_id(client)
+        previous_tasks = client.tasks.get_all(**{
+            'status': ['failed', 'stopped', 'completed'],
+            'system_tags': [system_tag],
+            'page_size': 20, 'page': 0,
+            'order_by': ['-last_update'],
+            'user': [current_user_id],
+            'only_fields': ['id', 'name', 'execution.artifacts', 'last_update']
+        })
+
     # if we do not find something, we ignore it
     state["continue_session"] = None
 
@@ -368,13 +377,22 @@ def find_prev_session(state, client):
                         choice = input("Restore workspace from session id={} '{}' @ {} [Y]/n? ".format(
                             t.id, t.data.name, str(t.data.last_update).split(".")[0]))
                         if str(choice).strip().lower() in ('n', 'no'):
-                            continue
+                            # we only try the first match (i.e. continue our last session), otherwise skip
+                            break
 
                     print("Restoring workspace from previous session id={}".format(t.id))
                     state["continue_session"] = t.id
                     break
+                elif not continue_session_id and i > 0:
+                    # we only try the first match (i.e. continue our last session), otherwise skip
+                    break
+
         except Exception as ex:
             logging.getLogger().warning('Failed retrieving old session {}:'.format(t.id, ex))
+
+    if continue_session_id and not state["continue_session"]:
+        logging.getLogger().warning(
+            'Failed retrieving previous session id={}: skipping restore session'.format(continue_session_id))
 
 
 def delete_old_tasks(state, client, base_task_id, skip_latest_session=True):
