@@ -173,19 +173,20 @@ def init_task(param, a_default_ssh_fingerprint):
     return task
 
 
-def setup_os_env(param):
+def setup_os_env(param, preserve_env_suffix=None):
     # get rid of all the runtime ClearML
-    preserve = (
-        "_API_HOST",
-        "_WEB_HOST",
-        "_FILES_HOST",
-        "_CONFIG_FILE",
-        "_API_ACCESS_KEY",
-        "_API_SECRET_KEY",
-        "_API_HOST_VERIFY_CERT",
-        "_DOCKER_IMAGE",
-        "_DOCKER_BASH_SCRIPT",
-    )
+    if preserve_env_suffix is None:
+        preserve_env_suffix = (
+            "_API_HOST",
+            "_WEB_HOST",
+            "_FILES_HOST",
+            "_CONFIG_FILE",
+            "_API_ACCESS_KEY",
+            "_API_SECRET_KEY",
+            "_API_HOST_VERIFY_CERT",
+            "_DOCKER_IMAGE",
+            "_DOCKER_BASH_SCRIPT",
+        )
     # set default docker image, with network configuration
     if param.get('default_docker', '').strip():
         os.environ["CLEARML_DOCKER_IMAGE"] = param['default_docker'].strip()
@@ -194,7 +195,8 @@ def setup_os_env(param):
     env = deepcopy(os.environ)
     for key in os.environ:
         # only set CLEARML_ remove any TRAINS_
-        if key.startswith("TRAINS") or (key.startswith("CLEARML") and not any(key.endswith(p) for p in preserve)):
+        if key.startswith("TRAINS") or (
+                key.startswith("CLEARML") and not any(key.endswith(p) for p in preserve_env_suffix)):
             env.pop(key, None)
 
     return env
@@ -698,7 +700,8 @@ def setup_ssh_server(hostname, hostnames, param, task, env):
                 'echo "export CLEARML_CONFIG_FILE={clearml_config_file}" >> /etc/profile'.format(
                     password=ssh_password,
                     port=port,
-                    clearml_config_file=os.environ.get("CLEARML_CONFIG_FILE") or os.environ.get("TRAINS_CONFIG_FILE"),
+                    clearml_config_file=env.get("CLEARML_CONFIG_FILE") or
+                                        os.environ.get("CLEARML_CONFIG_FILE") or os.environ.get("TRAINS_CONFIG_FILE"),
                 )
             )
             sshd_path = '/usr/sbin/sshd'
@@ -711,7 +714,8 @@ def setup_ssh_server(hostname, hostnames, param, task, env):
                 os.system(
                     'echo "export PATH=$PATH" >> $HOME/.profile && '
                     'echo "export CLEARML_CONFIG_FILE={clearml_config_file}" >> $HOME/.profile'.format(
-                    clearml_config_file=os.environ.get("CLEARML_CONFIG_FILE") or os.environ.get("TRAINS_CONFIG_FILE"),
+                    clearml_config_file=env.get("CLEARML_CONFIG_FILE") or
+                                        os.environ.get("CLEARML_CONFIG_FILE") or os.environ.get("TRAINS_CONFIG_FILE"),
                 ))
             except Exception:
                 print("warning failed setting ~/.profile")
@@ -878,6 +882,21 @@ def _b64_decode_file(encoded_string):
 def setup_user_env(param, task):
     env = setup_os_env(param)
 
+    # create temp config file,
+    try:
+        fd, local_filename = mkstemp(".clearml.conf")
+        os.close(fd)
+        from clearml.config import config_obj
+        # make sure it's loaded
+        config_obj.get("api", None)
+        conf_dict = config_obj._config.to_dict()
+        conf_dict ={k: v for k, v in conf_dict.items() if k in ("sdk", "api")}
+        with open(local_filename, 'wt') as f:
+            json.dump(conf_dict, f)
+        env["CLEARML_CONFIG_FILE"] = local_filename
+    except Exception as ex:
+        print("Error [{}]: Failed to store new config file, using original".format(ex))
+
     # apply vault if we have it
     vault_environment = {}
     if param.get("user_key") and param.get("user_secret"):
@@ -937,12 +956,22 @@ def setup_user_env(param, task):
 
     # set default user credentials
     if param.get("user_key") and param.get("user_secret"):
-        os.system("echo 'export CLEARML_API_ACCESS_KEY=\"{}\"' >> {}".format(
-            param.get("user_key", "").replace('$', '\\$'), source_conf))
-        os.system("echo 'export CLEARML_API_SECRET_KEY=\"{}\"' >> {}".format(
-            param.get("user_secret", "").replace('$', '\\$'), source_conf))
-        env['CLEARML_API_ACCESS_KEY'] = param.get("user_key")
-        env['CLEARML_API_SECRET_KEY'] = param.get("user_secret")
+        if param.get("user_key"):
+            env['CLEARML_API_ACCESS_KEY'] = param.get("user_key")
+            os.system("echo 'export CLEARML_API_ACCESS_KEY=\"{}\"' >> {}".format(
+                param.get("user_key").replace('$', '\\$'), source_conf))
+        else:
+            env.pop('CLEARML_API_ACCESS_KEY', None)
+            os.system("echo 'export CLEARML_API_ACCESS_KEY=' >> {}".format(source_conf))
+
+        if param.get("user_secret"):
+            env['CLEARML_API_SECRET_KEY'] = param.get("user_secret")
+            os.system("echo 'export CLEARML_API_SECRET_KEY=\"{}\"' >> {}".format(
+                param.get("user_secret").replace('$', '\\$'), source_conf))
+        else:
+            env.pop('CLEARML_API_SECRET_KEY', None)
+            os.system("echo 'export CLEARML_API_SECRET_KEY=' >> {}".format(source_conf))
+
     elif os.environ.get("CLEARML_AUTH_TOKEN"):
         env['CLEARML_AUTH_TOKEN'] = os.environ.get("CLEARML_AUTH_TOKEN")
         os.system("echo 'export CLEARML_AUTH_TOKEN=\"{}\"' >> {}".format(
@@ -950,11 +979,11 @@ def setup_user_env(param, task):
 
     if param.get("default_docker"):
         os.system("echo 'export CLEARML_DOCKER_IMAGE=\"{}\"' >> {}".format(
-            param.get("default_docker", "").strip() or env.get('CLEARML_DOCKER_IMAGE', ''), source_conf))
+            (param.get("default_docker") or "").strip() or (env.get('CLEARML_DOCKER_IMAGE') or ''), source_conf))
 
     if vault_environment:
         for k, v in vault_environment.items():
-            os.system("echo 'export {}=\"{}\"' >> {}".format(k, v, source_conf))
+            os.system("echo 'export {}={}' >> {}".format(k, "" if v in (None, "") else "\"{}\"".format(v), source_conf))
             env[k] = str(v) if v else ""
 
     # make sure we activate the venv in the bash
@@ -1400,6 +1429,7 @@ class SyncCallback:
         self._sync_func = sync_function
         self._monitor_process = monitor_process
         self._workspace_dir = workspace_dir
+        self._path_dir = None
         SyncCallback.singleton = self
         tmp_dir = Path(mkdtemp(prefix='session_'))
         self.pipe_file_name_c = tmp_dir / SyncCallback.pipe_file_name_c
@@ -1517,29 +1547,48 @@ class SyncCallback:
         # print("source_function:\n```\n{}\n```".format(source_function))
 
         full_path = None
-        for p in os.environ.get("PATH", "/usr/bin").split(os.pathsep):
+        path_folders = os.environ.get("PATH", "/usr/bin").split(os.pathsep)
+        path_folders += ["/tmp/.clearml.session.cmd/"]
+        if self._path_dir:
+            path_folders = [self._path_dir] + path_folders
+        last_ex = None
+        for i, p in enumerate(path_folders):
             # noinspection PyBroadException
             try:
-                if not Path(p).is_dir():
+                p = Path(p)
+                # create the last temp folder, the one we added
+                if i == len(path_folders) - 1:
+                    p.mkdir(parents=True, exist_ok=True)
+
+                if not p.is_dir():
                     continue
+
                 full_path = Path(p) / self.cmd_file
                 full_path.touch(exist_ok=True)
+
+                with open(full_path, "wt") as f:
+                    f.write(source_function)
+                os.chmod(full_path, 0o777)
+
+                if p.as_posix() not in path_folders:
+                    os.environ["PATH"] = (
+                            os.environ.get("PATH").rstrip(os.pathsep) + "{}{}".format(os.pathsep, p))
                 break
             except Exception as ex:
-                pass
+                last_ex = ex
+                if full_path:
+                    # noinspection PyBroadException
+                    try:
+                        Path(full_path).unlink()
+                    except Exception:
+                        pass
+                    full_path = None
 
         if not full_path:
-            print("ERROR: Failed to create sync execution cmd")
+            print("ERROR: Failed to create sync execution cmd: {}".format(last_ex))
             return
-
+        self._path_dir = full_path.as_posix()
         print("Creating sync command in: {}".format(full_path))
-
-        try:
-            with open(full_path, "wt") as f:
-                f.write(source_function)
-            os.chmod(full_path, 0o777)
-        except Exception as ex:
-            print("ERROR: Failed to create sync execution cmd {}: {}".format(full_path, ex))
 
     def _write_ssh_banner(self):
         banner_file = Path("/etc/update-motd.d/")
@@ -1584,9 +1633,9 @@ class SyncCallback:
         batch_command = [
             "#!/bin/bash",
             "[ \"$UID\" -ne 0 ] && echo \"shutdown: Permission denied. Try as root.\" && exit 1",
-            "[ ! -f /run/clearml ] && echo \"shutdown: failed.\" && exit 2",
+            "[ ! -f /tmp/.clearml.session.pid ] && echo \"shutdown: failed.\" && exit 2",
             "[ ! -z $(command -v {}) ] && echo \"Syncing workspace\" && {}".format(self.cmd_file, self.cmd_file),
-            "kill -9 $(cat /run/clearml 2>/dev/null) && echo \"system is now spinning down - "
+            "kill -9 $(cat /tmp/.clearml.session.pid 2>/dev/null) && echo \"system is now spinning down - "
             "it might take a minute if we need to upload the workspace:\""
             " && for ((i=180; i>=0; i--)); do echo -n \" .\"; sleep 1; done",
             ""
@@ -1595,37 +1644,41 @@ class SyncCallback:
         if not self._monitor_process:
             return
 
-        shutdown_cmd_directory = None
-        for p in os.environ.get("PATH", "/usr/bin").split(os.pathsep):
-            # default is first folder
-            if not shutdown_cmd_directory:
-                shutdown_cmd_directory = Path(p)
-                if not shutdown_cmd_directory.is_dir():
-                    shutdown_cmd_directory = None
-                    continue
+        path_folders = os.environ.get("PATH", "/usr/bin").split(os.pathsep)
+        if self._path_dir:
+            path_folders = [self._path_dir] + path_folders
+
+        last_ex = None
+        shutdown_cmd = None
+        for p in path_folders:
+            shutdown_cmd_directory = Path(p)
+            if not shutdown_cmd_directory.is_dir():
+                continue
+
             # noinspection PyBroadException
             try:
                 (Path(p) / "shutdown").unlink()
-                # the first we found is enough, we will use it
-                shutdown_cmd_directory = Path(p)
-                break
             except Exception:
                 pass
 
+            try:
+                shutdown_cmd = shutdown_cmd_directory / "shutdown"
+                with open(shutdown_cmd, "wt") as f:
+                    f.write("\n".join(batch_command))
+                os.chmod(shutdown_cmd.as_posix(), 0o755)
+                break
+            except Exception as ex:
+                last_ex = ex
+                shutdown_cmd = None
+
+        if not shutdown_cmd:
+            print("WARNING: Failed to write to shutdown cmd: {}".format(last_ex))
+
         try:
-            with open("/run/clearml", "wt") as f:
+            with open("/tmp/.clearml.session.pid", "wt") as f:
                 f.write("{}".format(self._monitor_process.pid))
         except Exception as ex:
             print("WARNING: Failed to write to run pid: {}".format(ex))
-
-        shutdown_cmd = None
-        try:
-            shutdown_cmd = shutdown_cmd_directory / "shutdown"
-            with open(shutdown_cmd, "wt") as f:
-                f.write("\n".join(batch_command))
-            os.chmod(shutdown_cmd.as_posix(), 0o755)
-        except Exception as ex:
-            print("WARNING: Failed to write to shutdown cmd {}: {}".format(shutdown_cmd, ex))
 
     def _stdout__patched__write__(self, is_stderr, *args, **kwargs):
         write_func = self._original_stderr_write if is_stderr else self._original_stdout_write
