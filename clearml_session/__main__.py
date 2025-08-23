@@ -347,7 +347,7 @@ def find_prev_session(state, client):
         'page_size': 100, 'page': 0,
         'order_by': ['-last_update'],
         'user': [current_user_id],
-        'only_fields': ['id']
+        'only_fields': ['id', 'name', 'execution.artifacts', 'last_update']
     })
 
     continue_session_id = state.get("continue_session")
@@ -356,17 +356,17 @@ def find_prev_session(state, client):
 
     for i, t in enumerate(previous_tasks):
         try:
-            task = Task.get_task(task_id=t.id)
-            if state.get("store_workspace") and task.artifacts:
+            if (state.get("store_workspace") and t.data.execution.artifacts and
+                    "workspace" in [a.key for a in t.data.execution.artifacts]):
                 if continue_session_id and continue_session_id == t.id:
                     print("Restoring workspace from previous session id={} [{}]".format(
-                        continue_session_id, task.data.last_update))
+                        continue_session_id, t.data.last_update))
                     state["continue_session"] = t.id
                     break
                 elif not continue_session_id and i == 0:
                     if not state.get("yes"):
                         choice = input("Restore workspace from session id={} '{}' @ {} [Y]/n? ".format(
-                            t.id, task.name, str(task.data.last_update).split(".")[0]))
+                            t.id, t.data.name, str(t.data.last_update).split(".")[0]))
                         if str(choice).strip().lower() in ('n', 'no'):
                             continue
 
